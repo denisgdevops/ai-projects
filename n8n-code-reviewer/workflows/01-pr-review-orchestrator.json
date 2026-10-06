@@ -1,0 +1,32 @@
+{
+  "name": "01 - PR Review Orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github-pr-review",
+        "responseMode": "onReceived",
+        "responseCode": 202,
+        "responseData": "firstEntryJson",
+        "options": {}
+      },
+      "id": "github-pr-webhook",
+      "name": "GitHub PR Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [120, 300],
+      "webhookId": "enterprise-ai-code-review-github-pr"
+    },
+    {
+      "parameters": {
+        "workflowId": "03 - AI Code Reviewer",
+        "options": {}
+      },
+      "id": "ai-code-reviewer",
+      "name": "AI Code Reviewer",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [360, 300]
+    }
+  ]
+}

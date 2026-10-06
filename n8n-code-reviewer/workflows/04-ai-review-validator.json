@@ -1,0 +1,66 @@
+{
+  "name": "04 - AI Review Validator",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "ai-validator-trigger",
+      "name": "Child Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst system = `You are an AI code-review critic and validator. Validate whether each proposed finding is supported by the supplied PR diff and, where applicable, by the supplied internal standard evidence.\\n\\nReturn only valid JSON: {\"validations\":[{\"finding_id\":\"AI-001\",\"validation\":\"VALID|QUESTIONABLE|INVALID\",\"confidence\":0.0,\"reason\":\"\"}]}.\\n\\nReject findings as INVALID when the diff does not support them, when an internal-standard finding lacks matching standard evidence, or when the finding is speculative. Use QUESTIONABLE when evidence exists but is incomplete or should be presented cautiously.`;\nconst request = {\n  model: $env.OPENAI_VALIDATOR_MODEL || $env.OPENAI_CODE_REVIEW_MODEL,\n  temperature: 0,\n  response_format: { type: 'json_object' },\n  messages: [\n    { role: 'system', content: system },\n    { role: 'user', content: JSON.stringify({ pr_context: input.pr_context, standards: input.standards, review: { summary: input.summary, findings: input.findings } }, null, 2) }\n  ]\n};\nreturn [{ json: { request, original: input } }];"
+      },
+      "id": "build-validation-request",
+      "name": "Build Validation Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{$env.OPENAI_API_KEY}}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.request}}",
+        "options": { "timeout": 120000 }
+      },
+      "id": "call-openai-validator",
+      "name": "Call OpenAI Validator",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [740, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Build Validation Request').first().json.original;\nconst minConfidence = Number($env.AI_REVIEW_MIN_CONFIDENCE || 0.80);\nconst response = $input.first().json;\nlet validations = [];\nif (!response.error) {\n  try {\n    const content = response.choices?.[0]?.message?.content || '{\"validations\":[]}';\n    const parsed = typeof content === 'string' ? JSON.parse(content) : content;\n    validations = Array.isArray(parsed.validations) ? parsed.validations : [];\n  } catch (error) {\n    validations = [];\n  }\n}\nconst validationById = new Map(validations.map((v) => [v.finding_id, { validation: ['VALID','QUESTIONABLE','INVALID'].includes(v.validation) ? v.validation : 'QUESTIONABLE', confidence: Math.max(0, Math.min(1, Number(v.confidence || 0))), reason: v.reason || '' }]));\nconst valid_findings = [];\nconst rejected_findings = [];\nfor (const finding of original.findings || []) {\n  const validation = validationById.get(finding.id) || { validation: response.error ? 'QUESTIONABLE' : 'INVALID', confidence: 0, reason: response.error ? 'Validator unavailable; finding not rejected automatically but marked questionable.' : 'Validator returned no support for this finding.' };\n  const enriched = { ...finding, validation: validation.validation, validation_confidence: validation.confidence, validation_reason: validation.reason };\n  if (validation.validation === 'INVALID' || finding.confidence < minConfidence) rejected_findings.push(enriched);\n  else valid_findings.push(enriched);\n}\nconst counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };\nfor (const f of valid_findings) counts[f.severity.toLowerCase()]++;\nreturn [{ json: { pr_metadata: original.pr_metadata, pr_context: original.pr_context, standards: original.standards, summary: { files_reviewed: original.summary?.files_reviewed || original.pr_context?.files_changed || 0, ...counts }, valid_findings, rejected_findings, validator_available: !response.error, min_confidence: minConfidence } }];"
+      },
+      "id": "filter-and-aggregate-findings",
+      "name": "Filter and Aggregate Findings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 300]
+    }
+  ],
+  "connections": {
+    "Child Workflow Input": { "main": [[{ "node": "Build Validation Request", "type": "main", "index": 0 }]] },
+    "Build Validation Request": { "main": [[{ "node": "Call OpenAI Validator", "type": "main", "index": 0 }]] },
+    "Call OpenAI Validator": { "main": [[{ "node": "Filter and Aggregate Findings", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "pinData": {},
+  "active": false,
+  "versionId": "poc-04"
+}

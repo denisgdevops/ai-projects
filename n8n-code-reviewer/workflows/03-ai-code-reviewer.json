@@ -1,0 +1,23 @@
+{
+  "name": "03 - AI Code Reviewer",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "ai-reviewer-trigger",
+      "name": "Child Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const codeToReview = $json[\"code\"];\n\n// Simulate AI code review process\nconst reviewComments = [];\n\nif (codeToReview.includes(\"eval\")) {\n  reviewComments.push(\"Avoid using 'eval' for security reasons.\");\n}\nif (codeToReview.length > 500) {\n  reviewComments.push(\"Consider breaking down the code into smaller functions for better readability.\");\n}\n\nreturn [{ json: { comments: reviewComments } }];"
+      },
+      "id": "ai-reviewer-function",
+      "name": "AI Code Review Function",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [480, 300]
+    }
+  ]
+}

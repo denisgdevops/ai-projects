@@ -1,0 +1,55 @@
+{
+  "name": "05 - Standards Ingestion",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-ingestion-trigger",
+      "name": "Manual Standards Ingestion Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [160, 300]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{($env.QDRANT_URL || 'http://qdrant:6333') + '/collections/' + ($env.QDRANT_STANDARDS_COLLECTION || 'enterprise_development_standards')}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "api-key", "value": "={{$env.QDRANT_API_KEY || ''}}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { vectors: { size: Number($env.OLLAMA_EMBEDDING_DIMENSIONS || 768), distance: 'Cosine' } } }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "ensure-qdrant-collection",
+      "name": "Ensure Qdrant Collection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [400, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "command": "node -e \"const fs=require('fs');const path='/files/standards';const docs=fs.readdirSync(path).filter(f=>f.endsWith('.md')).map(f=>({source_file:f,content:fs.readFileSync(path+'/'+f,'utf8')}));console.log(JSON.stringify(docs));\""
+      },
+      "id": "load-markdown-documents",
+      "name": "Load Markdown Documents",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const stdout = $input.first().json.stdout || '[]';\nconst docs = JSON.parse(stdout);\nconst chunkSize = Number($env.STANDARDS_CHUNK_SIZE || 1000);\nconst overlap = Number($env.STANDARDS_CHUNK_OVERLAP || 180);\nconst versionFrom = (content) => (content.match(/Version:\\s*([^\\n]+)/i) || [null, '1.0'])[1].trim();\nconst categoryFrom = (section) => (section.match(/Category:\\s*([^\\n]+)/i) || [null, 'General'])[1].trim();\nconst technologyFrom = (section) => (section.match(/Technology:\\s*([^\\n]+)/i) || [null, 'All'])[1].trim();\nconst splitLong = (text) => {\n  if (text.length <= chunkSize) return [text];\n  const out = [];\n  let i = 0;\n  while (i < text.length) {\n    out.push(text.slice(i, i + chunkSize));\n    i += Math.max(1, chunkSize - overlap);\n  }\n  return out;\n};\nconst items = [];\nfor (const doc of docs) {\n  const version = versionFrom(doc.content);\n  const parts = doc.content.split(/\\n(?=##\\s+)/g).filter((p) => p.trim());\n  for (const part of parts) {\n    const heading = (part.match(/^##\\s+([^\\n]+)/m) || [null, doc.source_file])[1].trim();\n    const idMatch = heading.match(/^([A-Z]+-[0-9]{3})\\s+[—-]\\s+(.+)$/);\n    const standard_id = idMatch ? idMatch[1] : heading.replace(/\\s+/g, '-').toUpperCase();\n    const title = idMatch ? idMatch[2] : heading;\n    for (const chunk of splitLong(part.trim())) {\n      items.push({ json: { standard_id, title, category: categoryFrom(part), technology: technologyFrom(part), source_file: doc.source_file, version, content: chunk, embedding_request: { model: $env.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text', prompt: `${standard_id} ${title}\\n${chunk}` } } });\n    }\n  }\n}\nreturn items;"
+      },
+      "id": "extract-metadata-and-chunk",
+      "name": "Extract Metadata and Chunk Documents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300]
+    }]
+}
+

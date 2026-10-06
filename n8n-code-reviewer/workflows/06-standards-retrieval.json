@@ -1,0 +1,82 @@
+{
+  "name": "06 - Standards Retrieval",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "standards-retrieval-trigger",
+      "name": "Child Workflow Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst files = input.files || [];\nconst query = [\n  `Changed languages: ${(input.languages || []).join(', ')}`,\n  `Changed files: ${(files.map((f) => typeof f === 'string' ? f : f.filename).filter(Boolean)).join(', ')}`,\n  `Diff summary: ${input.diff_summary || files.map((f) => `${f.filename}: ${(f.patch || '').slice(0, 1000)}`).join('\\n')}`\n].join('\\n');\nreturn [{ json: { original: input, embedding_request: { model: $env.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text', prompt: query }, query } }];"
+      },
+      "id": "create-semantic-query",
+      "name": "Create Semantic Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.OLLAMA_BASE_URL || 'http://ollama:11434'}}/api/embeddings",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.embedding_request}}",
+        "options": { "timeout": 60000 }
+      },
+      "id": "generate-query-embedding",
+      "name": "Generate Query Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{($env.QDRANT_URL || 'http://qdrant:6333') + '/collections/' + ($env.QDRANT_STANDARDS_COLLECTION || 'enterprise_development_standards') + '/points/search'}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "api-key", "value": "={{$env.QDRANT_API_KEY || ''}}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { vector: $json.embedding, limit: Number($env.STANDARDS_TOP_K || 8), with_payload: true, score_threshold: 0.15 } }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "search-qdrant",
+      "name": "Search Qdrant Standards",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst unavailable = Boolean(response.error || response.message === 'Not found' || !Array.isArray(response.result));\nif (unavailable) {\n  return [{ json: { standards_available: false, standards_unavailable_reason: response.error?.message || response.message || 'Qdrant or Ollama retrieval failed', standards: [] } }];\n}\nconst standards = response.result.map((r) => ({ standard_id: r.payload?.standard_id || null, title: r.payload?.title || null, category: r.payload?.category || null, technology: r.payload?.technology || null, source_file: r.payload?.source_file || null, version: r.payload?.version || null, score: r.score, content: r.payload?.content || '' }));\nreturn [{ json: { standards_available: true, standards_count: standards.length, standards } }];"
+      },
+      "id": "format-standards",
+      "name": "Format Retrieved Standards",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1180, 300]
+    }
+  ],
+  "connections": {
+    "Child Workflow Input": { "main": [[{ "node": "Create Semantic Query", "type": "main", "index": 0 }]] },
+    "Create Semantic Query": { "main": [[{ "node": "Generate Query Embedding", "type": "main", "index": 0 }]] },
+    "Generate Query Embedding": { "main": [[{ "node": "Search Qdrant Standards", "type": "main", "index": 0 }]] },
+    "Search Qdrant Standards": { "main": [[{ "node": "Format Retrieved Standards", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "pinData": {},
+  "active": false,
+  "versionId": "poc-06"
+}
